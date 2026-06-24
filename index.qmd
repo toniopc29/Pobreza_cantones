@@ -1,0 +1,475 @@
+---
+title: "Dashboard de Pobreza por Cantón - Costa Rica"
+format:
+  dashboard:
+    theme: cosmo
+    orientation: rows
+lang: es
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r}
+library(tidyverse)
+library(sf)
+library(readxl)
+library(leaflet)
+library(plotly)
+library(DT)
+library(htmltools)
+```
+
+
+
+```{r}
+
+#----------------------------
+# Cargar shapefile
+#----------------------------
+
+cantones <- st_read(
+  "datos/limitecantonal_5k.shp",
+  quiet = TRUE
+) |>
+st_transform(4326)
+
+#----------------------------
+# Leer Excel
+#----------------------------
+
+pobreza <- read_excel(
+
+  "pobreza.xlsx",
+
+  skip = 11,
+
+  col_names = c(
+
+    "Canton_Crudo",
+    "Hogares_Total",
+    "Sin_Carencias",
+    "Con_Carencias_Total",
+    "Con_Una",
+    "Con_Dos",
+    "Con_Tres",
+    "Con_Cuatro",
+    "Porcentaje_Carencias",
+    "Grupo_Clasificado"
+
+  )
+
+)
+
+#----------------------------
+# Limpiar datos
+#----------------------------
+
+pobreza_limpia <-
+
+pobreza |>
+
+filter(
+
+!is.na(Canton_Crudo),
+
+Canton_Crudo!="TOTAL"
+
+) |>
+
+mutate(
+
+CODIGO_CAN=
+
+as.integer(
+
+stringr::str_extract(
+
+Canton_Crudo,
+
+"^\\d{3}"
+
+)
+
+),
+
+Nombre_Canton=
+
+stringr::str_remove(
+
+Canton_Crudo,
+
+"^\\d{3}\\s*"
+
+),
+
+Porcentaje_Carencias=
+
+as.numeric(Porcentaje_Carencias),
+
+Hogares_Total=
+
+as.numeric(Hogares_Total)
+
+)
+
+#----------------------------
+# Join espacial
+#----------------------------
+
+mapa_pobreza<-
+
+left_join(
+
+cantones,
+
+pobreza_limpia,
+
+by=c("CÓDIGO_CAN"="CODIGO_CAN")
+
+)
+
+#----------------------------
+# Agrupación
+#----------------------------
+
+resumen_grupos<-
+
+pobreza_limpia |>
+
+group_by(Grupo_Clasificado)|>
+
+summarise(
+
+Promedio=
+
+mean(
+
+Porcentaje_Carencias,
+
+na.rm=TRUE
+
+),
+
+Cantidad=n()
+
+)
+
+#----------------------------
+# Indicadores
+#----------------------------
+
+total_hogares<-
+
+sum(
+
+pobreza_limpia$Hogares_Total,
+
+na.rm=TRUE
+
+)
+
+promedio_nacional<-
+
+round(
+
+mean(
+
+pobreza_limpia$Porcentaje_Carencias,
+
+na.rm=TRUE
+
+),
+
+2
+
+)
+
+canton_critico<-
+
+pobreza_limpia |>
+
+arrange(
+
+desc(Porcentaje_Carencias)
+
+)|>
+
+slice(1)
+
+```
+
+# Indicadores
+
+Row
+--------------------------------
+
+### Total de hogares
+
+```{r}
+htmltools::div(
+style="
+background:#0d6efd;
+color:white;
+padding:20px;
+border-radius:10px;
+text-align:center;
+font-size:24px;",
+strong("Total de hogares"),
+br(),
+format(total_hogares,big.mark=",")
+)
+```
+
+### Promedio nacional
+
+```{r}
+htmltools::div(
+style="
+background:#198754;
+color:white;
+padding:20px;
+border-radius:10px;
+text-align:center;
+font-size:24px;",
+strong("Promedio de carencias"),
+br(),
+paste0(promedio_nacional,"%")
+)
+```
+
+### Cantón crítico
+
+```{r}
+htmltools::div(
+style="
+background:#dc3545;
+color:white;
+padding:20px;
+border-radius:10px;
+text-align:center;
+font-size:24px;",
+strong("Mayor porcentaje"),
+br(),
+canton_critico$Nombre_Canton
+)
+```
+# Mapa interactivo
+
+Row
+--------------------------------
+
+### Porcentaje de hogares con carencias por cantón
+
+```{r}
+
+pal <- colorNumeric(
+  palette = "YlOrRd",
+  domain = mapa_pobreza$Porcentaje_Carencias,
+  na.color = "#d9d9d9"
+)
+
+leaflet(mapa_pobreza) |>
+
+addProviderTiles(providers$OpenStreetMap,
+group="OpenStreetMap") |>
+
+addProviderTiles(providers$CartoDB.Positron,
+group="CartoDB") |>
+
+addPolygons(
+
+fillColor=~pal(Porcentaje_Carencias),
+
+fillOpacity=.8,
+
+weight=1,
+
+color="white",
+
+popup=~paste0(
+
+"<b>",Nombre_Canton,"</b><br>",
+
+"Porcentaje de carencias: ",
+
+Porcentaje_Carencias,"%<br>",
+
+"Hogares: ",
+
+format(Hogares_Total,big.mark=",")
+
+)
+
+) |>
+
+addLegend(
+
+pal=pal,
+
+values=~Porcentaje_Carencias,
+
+title="% de carencias",
+
+position="bottomright"
+
+) |>
+
+addLayersControl(
+
+baseGroups=c(
+
+"OpenStreetMap",
+
+"CartoDB"
+
+),
+
+options=layersControlOptions(
+
+collapsed=FALSE
+
+)
+
+)
+
+```
+# Gráficos estadísticos
+
+Row
+--------------------------------
+
+### Promedio de carencias por grupo
+
+```{r}
+
+grafico1 <-
+
+ggplot(
+
+resumen_grupos,
+
+aes(
+
+x=factor(Grupo_Clasificado),
+
+y=Promedio,
+
+fill=factor(Grupo_Clasificado)
+
+)
+
+)+
+
+geom_col(show.legend=FALSE)+
+
+labs(
+
+title="Promedio de carencias",
+
+x="Grupo",
+
+y="Promedio (%)"
+
+)+
+
+scale_fill_brewer(palette="YlOrRd")+
+
+theme_minimal()
+
+ggplotly(grafico1)
+
+```
+
+### Cantidad de cantones por grupo
+
+```{r}
+
+grafico2 <-
+
+ggplot(
+
+resumen_grupos,
+
+aes(
+
+x=factor(Grupo_Clasificado),
+
+y=Cantidad,
+
+fill=factor(Grupo_Clasificado)
+
+)
+
+)+
+
+geom_col(show.legend=FALSE)+
+
+labs(
+
+title="Cantidad de cantones",
+
+x="Grupo",
+
+y="Cantidad"
+
+)+
+
+scale_fill_brewer(palette="Blues")+
+
+theme_minimal()
+
+ggplotly(grafico2)
+
+```
+# Tabla interactiva
+
+Row
+--------------------------------
+
+### Información por cantón
+
+```{r}
+
+datatable(
+
+pobreza_limpia |>
+
+select(
+
+Nombre_Canton,
+
+Hogares_Total,
+
+Porcentaje_Carencias,
+
+Grupo_Clasificado
+
+),
+
+extensions="Buttons",
+
+options=list(
+
+pageLength=10,
+
+dom='Bfrtip',
+
+buttons=c(
+
+'copy',
+
+'csv',
+
+'excel',
+
+'print'
+
+)
+
+)
+
+)
+
+```
